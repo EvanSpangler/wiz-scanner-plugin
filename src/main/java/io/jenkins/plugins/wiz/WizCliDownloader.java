@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.zip.GZIPInputStream;
 import jenkins.model.Jenkins;
 import jenkins.security.MasterToSlaveCallable;
 import org.apache.commons.lang3.SystemUtils;
@@ -50,7 +51,7 @@ public class WizCliDownloader {
             String cliFileName = isWindows ? WizCliSetup.WIZCLI_WINDOWS_PATH : WizCliSetup.WIZCLI_UNIX_PATH;
             FilePath cliPath = workspace.child(cliFileName);
 
-            downloadAndVerifyWizCli(parsedUrl.getUrl(), cliPath, workspace, listener);
+            downloadAndVerifyWizCli(parsedUrl, cliPath, workspace, listener);
 
             if (!isWindows) {
                 cliPath.chmod(0755);
@@ -67,32 +68,38 @@ public class WizCliDownloader {
     }
 
     private static void downloadAndVerifyWizCli(
-            String wizCliURL, FilePath cliPath, FilePath workspace, TaskListener listener) throws IOException {
-        try {
-            // Download CLI
-            listener.getLogger().println("Downloading Wiz CLI from: " + wizCliURL);
-            downloadFile(wizCliURL, cliPath);
-            listener.getLogger().println("Download completed successfully");
+            ParsedWizCliUrl parsedUrl, FilePath cliPath, FilePath workspace, TaskListener listener) throws IOException {
+        String wizCliURL = parsedUrl.getUrl();
 
-            // Construct verification file URLs
+        try {
             String sha256URL = wizCliURL + "-sha256";
             String signatureURL = sha256URL + ".sig";
 
-            // Create FilePath objects for verification files
             FilePath sha256File = workspace.child("wizcli-sha256");
             FilePath signatureFile = workspace.child("wizcli-sha256.sig");
             FilePath publicKeyFile = workspace.child("public_key.asc");
 
             try {
-                // Download verification files
-                downloadFile(sha256URL, sha256File);
-                downloadFile(signatureURL, signatureFile);
+                if (isExistingCliValid(
+                        cliPath,
+                        sha256URL,
+                        sha256File,
+                        signatureURL,
+                        signatureFile,
+                        publicKeyFile,
+                        workspace,
+                        listener)) {
+                    listener.getLogger().println("Wiz CLI already exists and is valid, skipping download");
+                    return;
+                }
 
-                // Extract public key from resources
-                extractPublicKey(publicKeyFile);
-
-                // Verify signature and checksum
-                verifySignatureAndChecksum(listener, cliPath, sha256File, signatureFile, publicKeyFile, workspace);
+                if (parsedUrl.isLatest()) {
+                    downloadLatestCli(
+                            wizCliURL, cliPath, sha256File, signatureFile, publicKeyFile, workspace, listener);
+                } else {
+                    downloadUncompressedCli(
+                            wizCliURL, cliPath, sha256File, signatureFile, publicKeyFile, workspace, listener);
+                }
 
             } finally {
                 // Clean up verification files
@@ -101,6 +108,204 @@ public class WizCliDownloader {
         } catch (Exception e) {
             listener.error("Failed to download or verify Wiz CLI: " + e.getMessage());
             throw new AbortException("Failed to setup Wiz CLI: " + e.getMessage());
+        }
+    }
+
+    private static boolean isExistingCliValid(
+            FilePath cliPath,
+            String sha256URL,
+            FilePath sha256File,
+            String signatureURL,
+            FilePath signatureFile,
+            FilePath publicKeyFile,
+            FilePath workspace,
+            TaskListener listener) {
+        try {
+            if (!cliPath.exists()) {
+                return false;
+            }
+
+            // Download verification files
+            downloadFile(sha256URL, sha256File);
+            downloadFile(signatureURL, signatureFile);
+            extractPublicKey(publicKeyFile);
+
+            // Verify signature
+            boolean signatureValid =
+                    workspace.act(new VerifySignatureCallable(sha256File, signatureFile, publicKeyFile));
+            if (!signatureValid) {
+                LOGGER.log(Level.FINE, "Existing CLI signature verification failed");
+                return false;
+            }
+
+            // Verify checksum
+            String expectedHash = sha256File.readToString().trim();
+            String actualHash = calculateSHA256(cliPath);
+
+            if (expectedHash.equals(actualHash)) {
+                return true;
+            }
+
+            LOGGER.log(Level.FINE, "Existing CLI checksum mismatch");
+            return false;
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Error validating existing CLI: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static void downloadLatestCli(
+            String wizCliURL,
+            FilePath cliPath,
+            FilePath sha256File,
+            FilePath signatureFile,
+            FilePath publicKeyFile,
+            FilePath workspace,
+            TaskListener listener)
+            throws IOException {
+
+        String gzURL = wizCliURL + ".gz";
+        String gzSha256URL = gzURL + "-sha256";
+        String gzSignatureURL = gzSha256URL + ".sig";
+        FilePath gzSha256File = workspace.child("wizcli-gz-sha256");
+        FilePath gzSignatureFile = workspace.child("wizcli-gz-sha256.sig");
+
+        try {
+            if (urlExists(gzURL)) {
+                listener.getLogger().println("Downloading compressed Wiz CLI from: " + gzURL);
+
+                downloadFile(gzSha256URL, gzSha256File);
+                downloadFile(gzSignatureURL, gzSignatureFile);
+                extractPublicKey(publicKeyFile);
+
+                downloadAndDecompressGzipFile(
+                        gzURL, cliPath, gzSha256File, gzSignatureFile, publicKeyFile, workspace, listener);
+
+                String sha256URL = wizCliURL + "-sha256";
+                String signatureURL = sha256URL + ".sig";
+
+                downloadFile(sha256URL, sha256File);
+                downloadFile(signatureURL, signatureFile);
+
+                verifySignatureAndChecksum(listener, cliPath, sha256File, signatureFile, publicKeyFile, workspace);
+            } else {
+                listener.getLogger().println("Compressed version not available, downloading uncompressed Wiz CLI");
+                downloadUncompressedCli(
+                        wizCliURL, cliPath, sha256File, signatureFile, publicKeyFile, workspace, listener);
+            }
+        } finally {
+            cleanupFile(gzSha256File);
+            cleanupFile(gzSignatureFile);
+        }
+    }
+
+    private static void cleanupFile(FilePath file) {
+        try {
+            if (file.exists()) {
+                file.delete();
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to delete file: " + file.getRemote(), e);
+        }
+    }
+
+    private static void downloadUncompressedCli(
+            String wizCliURL,
+            FilePath cliPath,
+            FilePath sha256File,
+            FilePath signatureFile,
+            FilePath publicKeyFile,
+            FilePath workspace,
+            TaskListener listener)
+            throws IOException {
+        listener.getLogger().println("Downloading Wiz CLI from: " + wizCliURL);
+        downloadFile(wizCliURL, cliPath);
+        listener.getLogger().println("Download completed successfully");
+
+        // Construct verification file URLs
+        String sha256URL = wizCliURL + "-sha256";
+        String signatureURL = sha256URL + ".sig";
+
+        // Download verification files
+        downloadFile(sha256URL, sha256File);
+        downloadFile(signatureURL, signatureFile);
+
+        // Extract public key from resources
+        extractPublicKey(publicKeyFile);
+
+        // Verify signature and checksum
+        verifySignatureAndChecksum(listener, cliPath, sha256File, signatureFile, publicKeyFile, workspace);
+    }
+
+    private static boolean urlExists(String fileURL) {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(fileURL);
+            ProxyConfiguration proxyConfig = Jenkins.get().getProxy();
+            conn = (HttpURLConnection)
+                    (proxyConfig != null
+                            ? url.openConnection(proxyConfig.createProxy(url.getHost()))
+                            : url.openConnection());
+            conn.setRequestMethod("HEAD");
+            conn.setConnectTimeout(CONNECT_TIMEOUT);
+            conn.setReadTimeout(CONNECT_TIMEOUT);
+
+            int responseCode = conn.getResponseCode();
+            return responseCode == HttpURLConnection.HTTP_OK;
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Error checking if URL exists: " + fileURL, e);
+            return false;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    private static void downloadAndDecompressGzipFile(
+            String gzURL,
+            FilePath targetPath,
+            FilePath gzSha256File,
+            FilePath gzSignatureFile,
+            FilePath publicKeyFile,
+            FilePath workspace,
+            TaskListener listener)
+            throws IOException {
+        FilePath parent = targetPath.getParent();
+        if (parent == null) {
+            throw new IOException("Invalid target path: parent directory is null");
+        }
+
+        FilePath gzTempFile = parent.child("wizcli-download.gz");
+        try {
+            // Download .gz file
+            downloadFile(gzURL, gzTempFile);
+
+            // Verify signature and checksum of compressed file
+            verifySignatureAndChecksum(listener, gzTempFile, gzSha256File, gzSignatureFile, publicKeyFile, workspace);
+            listener.getLogger().println("Compressed file verified, decompressing...");
+
+            // Decompress
+            decompressGzipFile(gzTempFile, targetPath);
+
+            listener.getLogger().println("Download and decompression completed successfully");
+        } finally {
+            cleanupFile(gzTempFile);
+        }
+    }
+
+    private static void decompressGzipFile(FilePath gzFile, FilePath targetPath) throws IOException {
+        try (InputStream fileInputStream = gzFile.read();
+                GZIPInputStream gzipInputStream = new GZIPInputStream(fileInputStream);
+                OutputStream outputStream = targetPath.write()) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = gzipInputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("File decompression was interrupted", e);
         }
     }
 
@@ -229,7 +434,7 @@ public class WizCliDownloader {
     private static String calculateSHA256(FilePath filePath) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] buffer = new byte[8192]; // 8KB buffer size
+            byte[] buffer = new byte[8192];
             int bytesRead;
 
             try (InputStream inputStream = filePath.read()) {
@@ -240,7 +445,6 @@ public class WizCliDownloader {
 
             byte[] hash = digest.digest();
             StringBuilder hexString = new StringBuilder();
-
             for (byte b : hash) {
                 String hex = Integer.toHexString(0xff & b);
                 if (hex.length() == 1) {
@@ -248,8 +452,10 @@ public class WizCliDownloader {
                 }
                 hexString.append(hex);
             }
-
             return hexString.toString();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("SHA256 calculation was interrupted", e);
         } catch (Exception e) {
             throw new IOException("Failed to calculate SHA256: " + e.getMessage(), e);
         }

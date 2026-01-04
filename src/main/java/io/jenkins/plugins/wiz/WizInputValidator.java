@@ -84,34 +84,6 @@ public class WizInputValidator {
     }
 
     /**
-     * Detects the CLI version from the URL.
-     *
-     * <p>Version detection rules:
-     * <ul>
-     *   <li>V1: URLs containing "v1/wizcli/" or "wizcli/1."</li>
-     *   <li>V0: All other valid Wiz CLI URLs</li>
-     * </ul>
-     *
-     * @param url the Wiz CLI download URL
-     * @return the detected CLI version
-     */
-    private static WizCliVersion detectVersionFromUrl(String url) {
-
-        // Check for v1/wizcli pattern (e.g., https://downloads.wiz.io/v1/wizcli/latest/...)
-        if (url.contains("v1/wizcli/")) {
-            return WizCliVersion.V1;
-        }
-
-        // Check for wizcli/1.x.x pattern (e.g., https://downloads.wiz.io/wizcli/1.0.2/...)
-        if (url.matches(".*wizcli/1\\..*")) {
-            return WizCliVersion.V1;
-        }
-
-        // Default to V0 for all other cases (including wizcli/0.x.x and wizcli/latest)
-        return WizCliVersion.V0;
-    }
-
-    /**
      * Validates the command structure and arguments.
      */
     public static void validateCommand(String userInput, WizCliVersion version) throws IllegalArgumentException {

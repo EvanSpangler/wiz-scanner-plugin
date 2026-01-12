@@ -84,7 +84,7 @@ public class WizCliDownloaderTest {
         assertTrue("Should have requested signature", requestedUrls.contains(cliPath + "-sha256.sig"));
         assertFalse("Should NOT have requested .gz", requestedUrls.contains(cliPath + ".gz"));
 
-        FilePath cliFile = workspace.child("wizcli");
+        FilePath cliFile = workspace.child(result.getExecutableName());
         assertTrue("CLI file should exist", cliFile.exists());
     }
 
@@ -107,7 +107,7 @@ public class WizCliDownloaderTest {
         assertTrue("Should have requested sha256", requestedUrls.contains(cliPath + "-sha256"));
         assertFalse("Should NOT have requested .gz-sha256", requestedUrls.contains(cliPath + ".gz-sha256"));
 
-        FilePath cliFile = workspace.child("wizcli");
+        FilePath cliFile = workspace.child(result.getExecutableName());
         assertTrue("CLI file should exist", cliFile.exists());
     }
 
@@ -128,7 +128,7 @@ public class WizCliDownloaderTest {
         assertTrue("Should have tried .gz first", requestedUrls.contains(cliPath + ".gz"));
         assertTrue("Should have fallen back to uncompressed CLI", requestedUrls.contains(cliPath));
 
-        FilePath cliFile = workspace.child("wizcli");
+        FilePath cliFile = workspace.child(result.getExecutableName());
         assertTrue("CLI file should exist", cliFile.exists());
     }
 
@@ -149,7 +149,7 @@ public class WizCliDownloaderTest {
                 requestedUrls.contains(cliPath + "-sha256"));
         assertFalse("Should NOT have requested uncompressed binary", requestedUrls.contains(cliPath));
 
-        FilePath cliFile = workspace.child("wizcli");
+        FilePath cliFile = workspace.child(result.getExecutableName());
         assertTrue("CLI file should exist", cliFile.exists());
     }
 
@@ -173,7 +173,10 @@ public class WizCliDownloaderTest {
         String cliPath = VERSIONED_CLI_PATH;
         setupUncompressedCliEndpoints(cliPath);
 
-        FilePath cliFile = workspace.child("wizcli");
+        String cliFileName = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+                ? WizCliSetup.WIZCLI_WINDOWS_PATH
+                : WizCliSetup.WIZCLI_UNIX_PATH;
+        FilePath cliFile = workspace.child(cliFileName);
         cliFile.write(new String(CLI_CONTENT, StandardCharsets.UTF_8), StandardCharsets.UTF_8.name());
 
         WizCliSetup result = runWithMockedPGPAndInputValidator(baseUrl + cliPath, true);

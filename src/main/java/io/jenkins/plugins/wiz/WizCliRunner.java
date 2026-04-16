@@ -41,7 +41,8 @@ public class WizCliRunner {
 
         try {
             WizCliSetup cliSetup = WizCliDownloader.setupWizCli(workspace, wizCliURL, listener);
-            return executeScan(workspace, env, launcher, listener, userInput, artifactName, cliSetup, wizClientId, wizSecretKey);
+            return executeScan(
+                    workspace, env, launcher, listener, userInput, artifactName, cliSetup, wizClientId, wizSecretKey);
         } catch (Exception e) {
             throw new AbortException("Error executing Wiz CLI: " + e.getMessage());
         }

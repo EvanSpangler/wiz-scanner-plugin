@@ -115,6 +115,44 @@ public class WizScannerResultTest {
     }
 
     @Test
+    public void testParseJsonContentWithV1_43_NullScanStatistics() {
+        // wizcli v1.43.0+ sets result.scanStatistics to null and moves data to result.analytics
+        String jsonStr = "{"
+                + "\"scanOriginResource\": {\"name\": \"alpine:latest\"},"
+                + "\"createdAt\": \"2026-04-21T10:00:00Z\","
+                + "\"status\": {\"verdict\": \"PASSED_BY_POLICY\"},"
+                + "\"result\": {"
+                + "\"scanStatistics\": null,"
+                + "\"analytics\": {"
+                + "\"vulnerabilities\": {"
+                + "\"criticalCount\": 159,"
+                + "\"highCount\": 517,"
+                + "\"mediumCount\": 0,"
+                + "\"lowCount\": 0,"
+                + "\"infoCount\": 0,"
+                + "\"totalCount\": 676"
+                + "}"
+                + "}"
+                + "},"
+                + "\"reportUrl\": \"https://app.wiz.io/findings/123\""
+                + "}";
+
+        JSONObject root = JSONObject.fromObject(jsonStr);
+        WizScannerResult result = WizScannerResult.parseJsonContent(root);
+
+        assertNotNull("Result should not be null", result);
+        assertEquals("alpine:latest", result.getScannedResource());
+        assertEquals(WizScannerResult.ScanStatus.PASSED, result.getStatus());
+        assertTrue(result.getAnalytics().isPresent());
+
+        var vulns = result.getAnalytics().map(map -> map.get("Vulnerabilities"));
+        assertTrue("Vulnerabilities analytics should be populated from result.analytics", vulns.isPresent());
+        assertEquals(159, vulns.get().getCriticalCount());
+        assertEquals(517, vulns.get().getHighCount());
+        assertEquals(676, vulns.get().getTotalCount());
+    }
+
+    @Test
     public void testParseJsonContentWithInvalidData() {
         String jsonStr = "{" + "\"scanOriginResource\": {\"name\": \"test-resource\"},"
                 + "\"status\": {\"verdict\": \"INVALID_STATUS\"}"

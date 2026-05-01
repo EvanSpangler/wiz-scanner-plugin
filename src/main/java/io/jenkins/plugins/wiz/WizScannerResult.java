@@ -340,8 +340,12 @@ public class WizScannerResult {
             if (root != null && root.has("result")) {
                 JSONObject result = root.getJSONObject("result");
                 if (result.has("scanStatistics")) {
+                    JSONObject scanStats = result.optJSONObject("scanStatistics");
+                    // wizcli v1.43.0+ sets scanStatistics to null; analytics path handles those counts
+                    if (scanStats == null || scanStats.isNullObject()) {
+                        return stats;
+                    }
                     ScannerAnalytics misconfigurationStatistics = new ScannerAnalytics();
-                    JSONObject scanStats = result.getJSONObject("scanStatistics");
                     misconfigurationStatistics.setInfoCount(scanStats.optInt("infoMatches", 0));
                     misconfigurationStatistics.setLowCount(scanStats.optInt("lowMatches", 0));
                     misconfigurationStatistics.setMediumCount(scanStats.optInt("mediumMatches", 0));
